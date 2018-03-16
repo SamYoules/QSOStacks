@@ -1,0 +1,153 @@
+# Date: 6 Mar 2018
+# Author: Sam Youles
+# Package: picca
+# stack_flux_clip.py
+# Select all spectra for the same quasar from shortqso12.txt (shortqso14.txt)
+#   & create a static plot of variations in the forest over different epochs.
+#   The stacked, weighted flux and continuum is also plotted.
+#   The values for flux at a specific wavelength for all spectra are extracted
+#   and any epochs with flux > 3-sigma are excluded.
+# Stacks are created for the whole data set.
+# Spectra obtained from https://dr14.sdss.org/optical/spectrum/search
+#        and https://dr12.sdss.org/optical/spectrum/search
+#        and https://data.sdss.org/sas/ebosswork/eboss/spectro/redux/test/bautista/v5_10_7/spectra/lite/
+
+from astropy.io import fits
+from picca import prep_del, io
+from picca.data import forest, delta
+from func import read_from_spec, read_data, stack_flux, init
+import fitsio
+import numpy as N
+import pylab as P
+import scipy as sp
+from scipy.interpolate import interp1d
+import sys
+
+print sys.argv[1]
+
+# Initialise
+init()
+order = 1
+mode = 'spec'
+npix_min = 50
+
+# Setup directories and files
+DR = sys.argv[1]
+if DR == 'DR12':
+    fname = 'shortqso12.txt'
+    out = open('DR12outliers.txt', 'w')
+elif DR ==  'DR14':
+    fname = 'shortqso14.txt'
+    out = open('DR14outliers.txt', 'w')
+elif DR ==  'DR15':
+    fname = 'shortqso15.txt'
+    out = open('DR15outliers.txt', 'w')
+errors = []
+
+# Set up the figure
+P.rcParams.update({'font.size':16})
+fig = P.figure(figsize=(10,8), edgecolor='none', facecolor='white', dpi=80)
+
+# Create arrays for THID etc from input files
+THID, PLATE, MJD, FIBERID, RA, DEC, Z = N.loadtxt(fname, unpack = 1)
+THID = THID.astype(int)
+PLATE = PLATE.astype(int)
+MJD = MJD.astype(int)
+FIBERID = FIBERID.astype(int)
+
+# Create a shorter array containing only unique Thing_ids (i.e. same QSO)
+UTHID = N.unique(THID)
+
+# Create shorter arrays for other variables, corresponding to unique Thing_id
+for T in UTHID:
+    w = (THID == T)
+    thid = THID[w]
+    if thid.size == 1:
+        continue
+    plate = PLATE[w]
+    mjd = MJD[w]
+    fiberid = FIBERID[w]
+    ra = RA[w]
+    dec = DEC[w]
+    z = Z[w]
+
+    # Read data from spec files for each epoch for the same QSO
+    data = read_data(DR, thid, ra, dec, z, plate, mjd, fiberid, order, mode)
+
+    # Find the mean flux value of the forest for each epoch
+    epochflux = []
+    g = data[0]
+    for f in data:
+        epochflux.append(N.sum(f.fl * f.iv)/N.sum(f.iv))
+
+    # Find median and 3-sigma value for epochflux
+    flux = N.asarray(epochflux)
+    median = N.median(flux)
+    sixteen = N.percentile(flux, 16)
+    eightyfour = N.percentile(flux, 84)
+    sigma = 0.5 * (eightyfour - sixteen)
+    sigma3minus = median - sigma * 3.
+    sigma3plus = median + sigma * 3.
+
+    # Discard any epochs that are 3 sigma or more away from the median
+    i = 0
+    l = []
+    for f in data:
+        if (flux[i] < sigma3plus and flux[i] > sigma3minus):
+            l.append(f)
+        else:
+            errors = '{} {} {} {}'.format(T, plate[i], mjd[i], fiberid[i])
+            print>>out, errors
+        i += 1
+    data = N.asarray(l)
+
+    # Fit the continua
+    for d in data:
+        d.cont_fit()
+
+    # Stack the weighted flux
+    ll1, st1, wst1  = stack_flux(data, 0)
+    # Fit the continuum for the stack
+    d = forest(ll1, st1, wst1, g.thid, g.ra, g.dec, g.zqso, g.plate, g.mjd, g.fid, g.order)
+    d.cont_fit()
+    # Create continuum in same bin widths as before
+    nstack = int((forest.lmax - forest.lmin) / forest.dll) + 1
+    co1 = sp.zeros(nstack)
+    bins=((d.ll - d.lmin) / d.dll + 0.5).astype(int)
+    c = sp.bincount(bins, weights = d.co)
+    co1[:len(c)] += c
+
+
+    # Set limits for axes
+    llmin = []
+    llmax = []
+    flmin = []
+    flmax = []
+    j = 0
+    while j < len(data):
+        f = data[j]
+        llmin.append(min(f.ll))
+        llmax.append(max(f.ll))
+        flmin.append(min(f.fl))
+        flmax.append(max(f.fl))
+        j += 1
+    xmin = 10**min(llmin)
+    xmax = 10**max(llmax)
+    ymin = min(flmin)
+    ymax = max(flmax)
+    ax = P.axes(xlim=(xmin, xmax), ylim=(ymin, ymax))
+    P.xlabel(r'$\lambda \ [\AAngstr\"{o}m]$')
+    P.ylabel(r'$f_\lambda \ [10^{-19} \ W m^{-2} \ nm^{-1}]$')
+    for f in data:
+        P.plot(10**f.ll, f.fl, lw=1, color='silver')
+    P.plot(10**ll1, st1, lw=2, color='darkblue')
+    P.plot(10**ll1, co1, lw=2, color='darkblue')
+
+    # Add title:
+    P.title(r'Stacked Flux for {} QSO: {}'.format(DR, g.thid), color='black')
+    P.legend()
+    P.savefig('{}static/clipped_stack_{}.png'.format(DR, g.thid))
+    P.clf()
+
+P.close()    
+out.close()

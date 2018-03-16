@@ -7,7 +7,7 @@ import scipy as sp
 from scipy.interpolate import interp1d
 import sys
 
-def init()
+def init():
     # Initialise
     forest.lmin = sp.log10(3600.)
     forest.lmax = sp.log10(5500.)
@@ -27,8 +27,6 @@ def init()
     iter_data = a[3].data
     forest.mean_cont = interp1d(iter_data.loglam_rest, iter_data.mean_cont, fill_value = 'extrapolate', kind = 'nearest')
 
-    order = 1
-    mode = 'spec'
 
 def read_from_spec(in_dir,thid,ra,dec,zqso,plate,mjd,fid,order,mode):
     # Open spec fits file and write data to pix_data
